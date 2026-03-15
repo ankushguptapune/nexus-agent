@@ -1,7 +1,6 @@
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, set, onValue } from "firebase/database";
+import { getDatabase, ref, set, get } from "firebase/database";
 
-// ─── YOUR FIREBASE CONFIG ───
 const firebaseConfig = {
   apiKey: "AIzaSyDHmMMzm8HjWpESEKCWmKOd_LrgPKMBiZs",
   authDomain: "nexus-agent-f8a67.firebaseapp.com",
@@ -14,92 +13,61 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
-const workspaceRef = ref(db, "nexus-workspace");
+const wsRef = ref(db, "nexus-workspace");
 
-// ─── AES-256-GCM ENCRYPTION (encrypts ALL data) ───
 const ENC_KEY = "NexusWorkspace#FullEncrypt!2026#SecureVault";
 const ENC_SALT = "NexusFullEncSalt2026";
 
-async function deriveKey(passphrase) {
+async function deriveKey() {
   const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey("raw", enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt: enc.encode(ENC_SALT), iterations: 100000, hash: "SHA-256" },
-    keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
-  );
+  const km = await crypto.subtle.importKey("raw", enc.encode(ENC_KEY), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name: "PBKDF2", salt: enc.encode(ENC_SALT), iterations: 100000, hash: "SHA-256" }, km, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 }
 
-async function encrypt(plainText) {
+async function encrypt(text) {
   try {
-    const key = await deriveKey(ENC_KEY);
-    const enc = new TextEncoder();
+    const key = await deriveKey();
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(plainText));
+    const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(text));
     const combined = new Uint8Array(iv.length + encrypted.byteLength);
     combined.set(iv, 0);
     combined.set(new Uint8Array(encrypted), iv.length);
     return btoa(String.fromCharCode(...combined));
-  } catch (e) {
-    console.error("Encryption failed:", e);
-    return null;
-  }
+  } catch (e) { console.error("Encrypt fail:", e); return null; }
 }
 
-async function decrypt(cipherB64) {
+async function decrypt(b64) {
   try {
-    const key = await deriveKey(ENC_KEY);
-    const raw = Uint8Array.from(atob(cipherB64), c => c.charCodeAt(0));
-    const iv = raw.slice(0, 12);
-    const data = raw.slice(12);
-    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
+    const key = await deriveKey();
+    const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: raw.slice(0, 12) }, key, raw.slice(12));
     return new TextDecoder().decode(decrypted);
-  } catch (e) {
-    console.error("Decryption failed:", e);
-    return null;
-  }
+  } catch (e) { console.error("Decrypt fail:", e); return null; }
 }
 
-// ─── SAVE: Encrypt everything → store ciphertext ───
-export async function saveShared(data) {
+// SAVE: encrypt entire workspace, write to Firebase
+export async function saveData(data) {
   try {
-    const plainJson = JSON.stringify(data);
-    const encrypted = await encrypt(plainJson);
-    if (encrypted) {
-      await set(workspaceRef, encrypted);
-    }
-  } catch (e) {
-    console.error("Save failed:", e);
-  }
+    const json = JSON.stringify(data);
+    const enc = await encrypt(json);
+    if (enc) await set(wsRef, enc);
+    return true;
+  } catch (e) { console.error("Save fail:", e); return false; }
 }
 
-// ─── LISTEN: Decrypt ciphertext → return data ───
-export function onDataChange(callback) {
-  return onValue(workspaceRef, async (snapshot) => {
-    if (snapshot.exists()) {
-      try {
-        const val = snapshot.val();
-        if (typeof val === "string" && val.length > 100) {
-          const decrypted = await decrypt(val);
-          if (decrypted) {
-            callback(JSON.parse(decrypted));
-            return;
-          }
-        }
-        if (typeof val === "object") {
-          callback(val);
-          return;
-        }
-        if (typeof val === "string") {
-          try { callback(JSON.parse(val)); return; } catch {}
-        }
-        callback(null);
-      } catch {
-        callback(null);
-      }
-    } else {
-      callback(null);
+// LOAD: read from Firebase, decrypt
+export async function loadData() {
+  try {
+    const snap = await get(wsRef);
+    if (!snap.exists()) return null;
+    const val = snap.val();
+    if (typeof val === "string" && val.length > 100) {
+      const dec = await decrypt(val);
+      if (dec) return JSON.parse(dec);
     }
-  });
+    // Fallback: old unencrypted data
+    if (typeof val === "object") return val;
+    if (typeof val === "string") { try { return JSON.parse(val); } catch {} }
+    return null;
+  } catch (e) { console.error("Load fail:", e); return null; }
 }
-
-export { db };
