@@ -1,20 +1,13 @@
-// ═══════════════════════════════════════════════════════
-// FIREBASE + FULL ENCRYPTION
-// ALL data is encrypted before leaving the browser.
-// Firebase stores ONLY encrypted ciphertext.
-// Even Firebase admins cannot read your data.
-// ═══════════════════════════════════════════════════════
-
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, set, onValue } from "firebase/database";
 
-// ─── REPLACE WITH YOUR FIREBASE CONFIG ───
+// ─── YOUR FIREBASE CONFIG ───
 const firebaseConfig = {
   apiKey: "AIzaSyDHmMMzm8HjWpESEKCWmKOd_LrgPKMBiZs",
   authDomain: "nexus-agent-f8a67.firebaseapp.com",
   databaseURL: "https://nexus-agent-f8a67-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "nexus-agent-f8a67",
-  storageBucket: "nexus-agent-f8a67.firebasestorage.app",",
+  storageBucket: "nexus-agent-f8a67.firebasestorage.app",
   messagingSenderId: "694515049428",
   appId: "1:694515049428:web:6ce3a7bd581fb1ff69ec41"
 };
@@ -23,16 +16,15 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const workspaceRef = ref(db, "nexus-workspace");
 
-// ─── AES-256-GCM ENCRYPTION ───
+// ─── AES-256-GCM ENCRYPTION (encrypts ALL data) ───
 const ENC_KEY = "NexusWorkspace#FullEncrypt!2026#SecureVault";
 const ENC_SALT = "NexusFullEncSalt2026";
-const ENC_ITER = 100000;
 
 async function deriveKey(passphrase) {
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey("raw", enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt: enc.encode(ENC_SALT), iterations: ENC_ITER, hash: "SHA-256" },
+    { name: "PBKDF2", salt: enc.encode(ENC_SALT), iterations: 100000, hash: "SHA-256" },
     keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
   );
 }
@@ -67,7 +59,7 @@ async function decrypt(cipherB64) {
   }
 }
 
-// ─── SAVE: Encrypt entire workspace → store ciphertext ───
+// ─── SAVE: Encrypt everything → store ciphertext ───
 export async function saveShared(data) {
   try {
     const plainJson = JSON.stringify(data);
@@ -80,24 +72,27 @@ export async function saveShared(data) {
   }
 }
 
-// ─── LISTEN: Decrypt ciphertext → return workspace data ───
+// ─── LISTEN: Decrypt ciphertext → return data ───
 export function onDataChange(callback) {
   return onValue(workspaceRef, async (snapshot) => {
     if (snapshot.exists()) {
       try {
-        const cipherText = snapshot.val();
-        // If it's a string, it's encrypted
-        if (typeof cipherText === "string") {
-          const decrypted = await decrypt(cipherText);
+        const val = snapshot.val();
+        if (typeof val === "string" && val.length > 100) {
+          const decrypted = await decrypt(val);
           if (decrypted) {
             callback(JSON.parse(decrypted));
-          } else {
-            callback(null);
+            return;
           }
-        } else {
-          // Legacy: unencrypted JSON object (first run migration)
-          callback(cipherText);
         }
+        if (typeof val === "object") {
+          callback(val);
+          return;
+        }
+        if (typeof val === "string") {
+          try { callback(JSON.parse(val)); return; } catch {}
+        }
+        callback(null);
       } catch {
         callback(null);
       }
