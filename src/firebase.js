@@ -8,13 +8,13 @@ import { initializeApp } from "firebase/app";
 import { getDatabase, ref, set, onValue } from "firebase/database";
 
 const firebaseConfig = {
-  apiKey: "PASTE_YOUR_API_KEY_HERE",
-  authDomain: "PASTE_YOUR_PROJECT_ID.firebaseapp.com",
-  databaseURL: "https://PASTE_YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
-  projectId: "PASTE_YOUR_PROJECT_ID",
-  storageBucket: "PASTE_YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "PASTE_YOUR_SENDER_ID",
-  appId: "PASTE_YOUR_APP_ID"
+  apiKey: "AIzaSyDHmMMzm8HjWpESEKCWmKOd_LrgPKMBiZs",
+  authDomain: "nexus-agent-f8a67.firebaseapp.com",
+  databaseURL: "https://nexus-agent-f8a67-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "nexus-agent-f8a67",
+  storageBucket: "nexus-agent-f8a67.firebasestorage.app",
+  messagingSenderId: "694515049428",
+  appId: "1:694515049428:web:6ce3a7bd581fb1ff69ec41"
 };
 
 const app = initializeApp(firebaseConfig);
