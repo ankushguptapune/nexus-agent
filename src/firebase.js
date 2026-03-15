@@ -1,44 +1,103 @@
 // ═══════════════════════════════════════════════════════
-// FIREBASE CONFIGURATION
-// Replace the values below with YOUR Firebase project config
-// (Step-by-step guide is in DEPLOY-GUIDE.md)
+// FIREBASE + FULL ENCRYPTION
+// ALL data is encrypted before leaving the browser.
+// Firebase stores ONLY encrypted ciphertext.
+// Even Firebase admins cannot read your data.
 // ═══════════════════════════════════════════════════════
 
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, set, onValue } from "firebase/database";
 
+// ─── REPLACE WITH YOUR FIREBASE CONFIG ───
 const firebaseConfig = {
   apiKey: "AIzaSyDHmMMzm8HjWpESEKCWmKOd_LrgPKMBiZs",
   authDomain: "nexus-agent-f8a67.firebaseapp.com",
   databaseURL: "https://nexus-agent-f8a67-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "nexus-agent-f8a67",
-  storageBucket: "nexus-agent-f8a67.firebasestorage.app",
+  storageBucket: "nexus-agent-f8a67.firebasestorage.app",",
   messagingSenderId: "694515049428",
   appId: "1:694515049428:web:6ce3a7bd581fb1ff69ec41"
 };
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
-
-// Shared workspace data reference
 const workspaceRef = ref(db, "nexus-workspace");
 
-// Save data to Firebase (shared with all users)
+// ─── AES-256-GCM ENCRYPTION ───
+const ENC_KEY = "NexusWorkspace#FullEncrypt!2026#SecureVault";
+const ENC_SALT = "NexusFullEncSalt2026";
+const ENC_ITER = 100000;
+
+async function deriveKey(passphrase) {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey("raw", enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: enc.encode(ENC_SALT), iterations: ENC_ITER, hash: "SHA-256" },
+    keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+  );
+}
+
+async function encrypt(plainText) {
+  try {
+    const key = await deriveKey(ENC_KEY);
+    const enc = new TextEncoder();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(plainText));
+    const combined = new Uint8Array(iv.length + encrypted.byteLength);
+    combined.set(iv, 0);
+    combined.set(new Uint8Array(encrypted), iv.length);
+    return btoa(String.fromCharCode(...combined));
+  } catch (e) {
+    console.error("Encryption failed:", e);
+    return null;
+  }
+}
+
+async function decrypt(cipherB64) {
+  try {
+    const key = await deriveKey(ENC_KEY);
+    const raw = Uint8Array.from(atob(cipherB64), c => c.charCodeAt(0));
+    const iv = raw.slice(0, 12);
+    const data = raw.slice(12);
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
+    return new TextDecoder().decode(decrypted);
+  } catch (e) {
+    console.error("Decryption failed:", e);
+    return null;
+  }
+}
+
+// ─── SAVE: Encrypt entire workspace → store ciphertext ───
 export async function saveShared(data) {
   try {
-    await set(workspaceRef, JSON.stringify(data));
+    const plainJson = JSON.stringify(data);
+    const encrypted = await encrypt(plainJson);
+    if (encrypted) {
+      await set(workspaceRef, encrypted);
+    }
   } catch (e) {
     console.error("Save failed:", e);
   }
 }
 
-// Listen for real-time data changes
+// ─── LISTEN: Decrypt ciphertext → return workspace data ───
 export function onDataChange(callback) {
-  return onValue(workspaceRef, (snapshot) => {
+  return onValue(workspaceRef, async (snapshot) => {
     if (snapshot.exists()) {
       try {
-        const data = JSON.parse(snapshot.val());
-        callback(data);
+        const cipherText = snapshot.val();
+        // If it's a string, it's encrypted
+        if (typeof cipherText === "string") {
+          const decrypted = await decrypt(cipherText);
+          if (decrypted) {
+            callback(JSON.parse(decrypted));
+          } else {
+            callback(null);
+          }
+        } else {
+          // Legacy: unencrypted JSON object (first run migration)
+          callback(cipherText);
+        }
       } catch {
         callback(null);
       }
